@@ -1,6 +1,65 @@
-import { eq, and, desc, count } from 'drizzle-orm';
+import { eq, and, desc, count, inArray } from 'drizzle-orm';
 import { db } from '@/db';
-import { possibleDuplicates, teachersRaw } from '@/db/schema';
+import { possibleDuplicates, teachersRaw, teachers } from '@/db/schema';
+
+type TeacherRecord = {
+  name: string;
+  phone: string;
+  email: string;
+  school: string;
+  city: string;
+  recordId?: string;
+  booksAssigned?: string;
+  teacherOwnerId?: string;
+  teacherOwner?: string;
+  firstName?: string;
+  lastName?: string;
+  institutionId?: string;
+  institutionName?: string;
+  salutation?: string;
+};
+
+type RawRow = typeof teachersRaw.$inferSelect;
+type TeacherRow = typeof teachers.$inferSelect;
+
+function rawToRecord(r: RawRow): TeacherRecord {
+  return {
+    name: r.name ?? '',
+    phone: r.phone ?? '',
+    email: r.email ?? '',
+    school: r.school ?? '',
+    city: r.city ?? '',
+    recordId: r.recordId ?? undefined,
+    booksAssigned: r.booksAssigned ?? r.books ?? undefined,
+    teacherOwnerId: r.teacherOwnerId ?? undefined,
+    teacherOwner: r.teacherOwner ?? undefined,
+    firstName: r.firstName ?? undefined,
+    lastName: r.lastName ?? undefined,
+    institutionId: r.institutionId ?? undefined,
+    institutionName: r.institutionName ?? undefined,
+    salutation: r.salutation ?? undefined,
+  };
+}
+
+function teacherToRecord(t: TeacherRow): TeacherRecord {
+  return {
+    name: t.name,
+    // arrays store primary as last element
+    phone: t.phones?.[t.phones.length - 1] ?? '',
+    email: t.emails?.[t.emails.length - 1] ?? '',
+    school: t.school ?? '',
+    city: t.city ?? '',
+    recordId: t.recordId ?? undefined,
+    booksAssigned: t.booksAssigned ?? undefined,
+    teacherOwnerId: t.teacherOwnerId ?? undefined,
+    teacherOwner: t.teacherOwner ?? undefined,
+    firstName: t.firstName ?? undefined,
+    lastName: t.lastName ?? undefined,
+    institutionId: t.institutionId ?? undefined,
+    institutionName: t.institutionName ?? undefined,
+    salutation: t.salutation ?? undefined,
+  };
+}
 
 export class DuplicateService {
   static async list(params: {
@@ -31,8 +90,28 @@ export class DuplicateService {
 
     const total = Number(countResult[0]?.total ?? 0);
 
+    // incoming_record / existing_record jsonb columns are not populated at insert
+    // time — hydrate them from the referenced raw + master teacher rows so the
+    // frontend diff view always has records to render.
+    const rawIds = [...new Set(rows.map((r) => r.rawTeacherId).filter((v): v is string => !!v))];
+    const candidateIds = [...new Set(rows.map((r) => r.candidateTeacherId).filter((v): v is string => !!v))];
+
+    const [rawRows, teacherRows] = await Promise.all([
+      rawIds.length ? db.select().from(teachersRaw).where(inArray(teachersRaw.id, rawIds)) : Promise.resolve([]),
+      candidateIds.length ? db.select().from(teachers).where(inArray(teachers.id, candidateIds)) : Promise.resolve([]),
+    ]);
+
+    const rawMap = new Map(rawRows.map((r) => [r.id, rawToRecord(r)]));
+    const teacherMap = new Map(teacherRows.map((t) => [t.id, teacherToRecord(t)]));
+
+    const data = rows.map((r) => ({
+      ...r,
+      incomingRecord: r.incomingRecord ?? (r.rawTeacherId ? rawMap.get(r.rawTeacherId) ?? null : null),
+      existingRecord: r.existingRecord ?? (r.candidateTeacherId ? teacherMap.get(r.candidateTeacherId) ?? null : null),
+    }));
+
     return {
-      data: rows,
+      data,
       total,
       page: params.page,
       pageSize: params.pageSize,
