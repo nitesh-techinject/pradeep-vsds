@@ -1,0 +1,124 @@
+version: '3.9'
+
+services:
+  # ── PostgreSQL 16 ─────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: vsds_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: vsds
+      POSTGRES_PASSWORD: vsds
+      POSTGRES_DB: vsds
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U vsds -d vsds']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Redis 7 (BullMQ queue backend) ───────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: vsds_redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Backend API ──────────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile
+    container_name: vsds_backend
+    restart: unless-stopped
+    env_file:
+      - ./apps/backend/.env.docker
+    environment:
+      DATABASE_URL: postgresql://vsds:vsds@postgres:5432/vsds
+      REDIS_URL: redis://redis:6379
+      PORT: 3001
+      NODE_ENV: production
+      CORS_ORIGINS: ${CORS_ORIGINS:-https://vsds.pradeeppublications.com,https://admin-dashboard-theta-opal.vercel.app,http://localhost:3000}
+    ports:
+      - '3001:3001'
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Batch Advance Worker ─────────────────────────────────────────────────────
+  worker_batch_advance:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile.worker
+      args:
+        WORKER: batchAdvance
+    container_name: vsds_worker_batch_advance
+    restart: unless-stopped
+    env_file:
+      - ./apps/backend/.env.docker
+    environment:
+      DATABASE_URL: postgresql://vsds:vsds@postgres:5432/vsds
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Ordering Worker ──────────────────────────────────────────────────────────
+  worker_ordering:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile.worker
+      args:
+        WORKER: ordering
+    container_name: vsds_worker_ordering
+    restart: unless-stopped
+    env_file:
+      - ./apps/backend/.env.docker
+    environment:
+      DATABASE_URL: postgresql://vsds:vsds@postgres:5432/vsds
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # ── Messaging Worker ─────────────────────────────────────────────────────────
+  worker_messaging:
+    build:
+      context: ./apps/backend
+      dockerfile: Dockerfile.worker
+      args:
+        WORKER: messaging
+    container_name: vsds_worker_messaging
+    restart: unless-stopped
+    env_file:
+      - ./apps/backend/.env.docker
+    environment:
+      DATABASE_URL: postgresql://vsds:vsds@postgres:5432/vsds
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+  redis_data:

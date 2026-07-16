@@ -1,0 +1,13 @@
+FROM oven/bun:latest AS base
+WORKDIR /app
+
+ARG WORKER=messaging
+
+COPY package.json bun.lock* ./
+RUN bun install --production
+
+COPY . .
+
+ENV WORKER_NAME=${WORKER}
+
+CMD ["sh", "-c", "bun src/workers/${WORKER_NAME}.worker.ts"]
